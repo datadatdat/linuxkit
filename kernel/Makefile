@@ -126,11 +126,11 @@ buildkerneldeps-%: Dockerfile Makefile $(wildcard patches-$(call series,$*)/*) $
 
 buildplainkernel-%: buildkerneldeps-%
 	$(eval KERNEL_SERIES=$(call series,$*))
-	linuxkit pkg build . $(FORCE) --platforms $(BUILD_PLATFORM) --build-yml ./build-kernel.yml --tag "$*-{{.Hash}}" --build-arg-file $(KERNEL_SERIES)/build-args 
+	linuxkit pkg build . $(FORCE) --platforms $(BUILD_PLATFORM) --build-yml ./build-kernel.yml --tag "$*-{{.Hash}}" --build-arg-file $(KERNEL_SERIES)/build-args $(if $(BUILDERS),--builders $(BUILDERS),) 
 
 builddebugkernel-%: buildkerneldeps-%
 	$(eval KERNEL_SERIES=$(call series,$*))
-	linuxkit pkg build . $(FORCE) --platforms $(BUILD_PLATFORM) --build-yml ./build-kernel.yml --tag "$*-dbg-{{.Hash}}" --build-arg-file $(KERNEL_SERIES)/build-args --build-arg-file build-args-debug
+	linuxkit pkg build . $(FORCE) --platforms $(BUILD_PLATFORM) --build-yml ./build-kernel.yml --tag "$*-dbg-{{.Hash}}" --build-arg-file $(KERNEL_SERIES)/build-args --build-arg-file build-args-debug $(if $(BUILDERS),--builders $(BUILDERS),)
 
 push-%: notdirty build-% pushkernel-% tagbuilder-% pushtools-%;
 
