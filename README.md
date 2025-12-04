@@ -166,6 +166,151 @@ This is an open project without fixed judgements, open to the community to set t
 
 There are monthly [development reports](reports/) summarising the work carried out each month.
 
+## Building Custom Kernel for macOS Docker Desktop (ARM64)
+
+This section documents the process for building a custom LinuxKit kernel for macOS Docker Desktop on Apple Silicon (ARM64). This is necessary when Docker Desktop uses a kernel version that doesn't have pre-built ARM64 images available upstream.
+
+### Problem Context
+
+Docker Desktop 4.53.0 on macOS uses kernel 6.12.54-linuxkit, but the upstream linuxkit/kernel repository only has ARM64 images up to 6.12.52. To use ZFS modules or other kernel-dependent tools, we need to build the 6.12.54 kernel for ARM64.
+
+### Prerequisites
+
+1. Docker Desktop for Mac installed and running
+2. Homebrew installed
+3. LinuxKit CLI tool: `brew tap linuxkit/linuxkit && brew install --HEAD linuxkit`
+4. Git repository forked from linuxkit/linuxkit
+
+### Build Environment Issues on macOS
+
+When building via SSH on macOS, you'll encounter Docker credential helper issues because the keychain is locked in SSH sessions. The linuxkit build process needs to pull the buildkit image, which requires Docker Hub authentication.
+
+**Symptoms:**
+```
+error getting credentials - err: exit status 1, out: `keychain cannot be accessed because the current session does not allow user interaction`
+creating builder container 'linuxkit-builder' in context 'default'
+Error: unable to create or find builder container linuxkit-builder in context default after 3 retries
+```
+
+**Root Causes:**
+1. Docker credential helper (`docker-credential-desktop`) not in PATH when running via SSH
+2. Docker context defaults to `default` (pointing to `/var/run/docker.sock` which doesn't exist on macOS)
+3. LinuxKit doesn't automatically use the active Docker context for builder creation
+
+### File Changes Made
+
+#### 1. Update Kernel Version
+
+**File:** `kernel/6.12.x/build-args`
+
+Update the kernel version:
+```
+KERNEL_VERSION=6.12.54
+```
+
+#### 2. Add BUILDERS Parameter Support to Makefile
+
+**File:** `kernel/Makefile`
+
+Modified the `buildplainkernel-%` and `builddebugkernel-%` targets to accept an optional `BUILDERS` parameter:
+
+```makefile
+buildplainkernel-%: buildkerneldeps-%
+	$(eval KERNEL_SERIES=$(call series,$*))
+	linuxkit pkg build . $(FORCE) --platforms $(BUILD_PLATFORM) --build-yml ./build-kernel.yml --tag "$*-{{.Hash}}" --build-arg-file $(KERNEL_SERIES)/build-args $(if $(BUILDERS),--builders $(BUILDERS),)
+
+builddebugkernel-%: buildkerneldeps-%
+	$(eval KERNEL_SERIES=$(call series,$*))
+	linuxkit pkg build . $(FORCE) --platforms $(BUILD_PLATFORM) --build-yml ./build-kernel.yml --tag "$*-{{.Hash}}" --build-arg-file $(KERNEL_SERIES)/build-args --build-arg-file build-args-debug $(if $(BUILDERS),--builders $(BUILDERS),)
+```
+
+This allows specifying which Docker context to use for building: `BUILDERS="linux/arm64=desktop-linux"`
+
+### Build Commands
+
+#### Check Docker Contexts and Buildx Builders
+
+```bash
+# List available Docker contexts
+docker context ls
+
+# List buildx builders
+docker buildx ls
+```
+
+On macOS you should see:
+```
+NAME              DESCRIPTION                               DOCKER ENDPOINT
+default           Current DOCKER_HOST based configuration   unix:///var/run/docker.sock
+desktop-linux *   Docker Desktop                            unix:///Users/<user>/.docker/run/docker.sock
+```
+
+#### Building the Kernel
+
+**Important:** You must include the Docker credential helper path in your PATH when building:
+
+```bash
+# Set up proper PATH including linuxkit, docker, and credential helper
+export PATH=/opt/homebrew/bin:/usr/local/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH
+
+# Navigate to kernel directory
+cd ~/dev/linuxkit/kernel
+
+# Build for ARM64 using desktop-linux context
+make build-6.12.54 ARCH=arm64 BUILDERS="linux/arm64=desktop-linux"
+```
+
+**Why these paths are needed:**
+- `/opt/homebrew/bin` - linuxkit CLI tool
+- `/usr/local/bin` - docker CLI
+- `/Applications/Docker.app/Contents/Resources/bin` - docker-credential-desktop (fixes credential errors)
+
+### Build Process Details
+
+The build command will:
+1. Check local cache for existing image
+2. Check Docker Hub registry
+3. Pull base images (Alpine, buildkit)
+4. Create a `linuxkit-builder` container in the specified context
+5. Run buildkit to compile the kernel
+6. Package kernel, modules, and firmware into a Docker image
+7. Tag as `linuxkit/kernel:6.12.54-<hash>`
+
+### Troubleshooting
+
+**Error: "unable to create or find builder container"**
+- Ensure `BUILDERS="linux/arm64=desktop-linux"` is specified
+- Verify Docker Desktop is running
+- Check that docker-credential-desktop is in PATH
+
+**Error: "keychain cannot be accessed"**
+- Add `/Applications/Docker.app/Contents/Resources/bin` to PATH
+- Alternatively, run from a logged-in terminal session (not SSH)
+
+**Error: "context default" when desktop-linux is active**
+- This means the BUILDERS parameter isn't being passed correctly
+- Verify the Makefile changes are applied
+- Ensure you're using the updated Makefile
+
+### Next Steps After Kernel Build
+
+Once the kernel is built:
+1. Tag it for your organization: `docker tag linuxkit/kernel:6.12.54-<hash> datadatdat/kernel:6.12.54`
+2. Push to Docker Hub: `docker push datadatdat/kernel:6.12.54`
+3. Update zfs-linuxkit to reference your custom kernel image
+4. Build ZFS modules against the custom kernel
+
+### Git Workflow
+
+Commits made:
+```bash
+# In linuxkit repo
+git add kernel/6.12.x/build-args
+git add kernel/Makefile
+git commit -m "Update kernel to 6.12.54 and add BUILDERS parameter support"
+git push
+```
+
 ## Adopters
 
 We maintain an incomplete list of [adopters](ADOPTERS.md). Please open a PR if you are using LinuxKit in production or in your project, or both.
